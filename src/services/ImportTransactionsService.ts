@@ -1,5 +1,5 @@
 import path from 'path';
-import { getCustomRepository, getRepository } from 'typeorm';
+import { getCustomRepository, getRepository, In } from 'typeorm';
 import csv from 'csvtojson';
 import uploadConfig from '../config/upload';
 
@@ -24,35 +24,45 @@ class ImportTransactionsService {
     const categoriesRepository = getRepository(Category);
 
     const filePath = path.join(uploadConfig.directory, fileName);
+    const transactions: ITransactionParsed[] = [];
+    const categories: string[] = [];
 
-    const transactions = csv().fromFile(filePath).then(async (transactionsParsed: ITransactionParsed[]) => {
-      const promisedTransactions = transactionsParsed.map(async transac => {
+    const parsed: ITransactionParsed[] = await csv().fromFile(filePath);
 
-        const { title, type, value, category } = transac;
-
-        let category_id: string;
-
-        const categoryExists = await categoriesRepository.findOne({where: {title: category}});
-
-        if(categoryExists) {
-          category_id = categoryExists.id;
-        }
-        else {
-          const categoryNeo = categoriesRepository.create({title: category});
-          await categoriesRepository.save(categoryNeo);
-          category_id = categoryNeo.id;
-        }
-
-        const transaction = transactionsRepository.create({ title, type, value, category_id });
-        await transactionsRepository.save(transaction);
-
-        return transaction;
-      });
-
-      return Promise.all(promisedTransactions);
+    parsed.forEach(p => {
+      transactions.push(p);
+      categories.push(p.category);
     });
 
-    return transactions;
+    const foundCategories = await categoriesRepository.find({ where: { title: In(categories) } });
+
+    const foundCategoriesTitles = foundCategories.map(category => category.title);
+
+    const newCategoriesTitles = categories
+      .filter(category => !foundCategoriesTitles.includes(category))
+      .filter((value, index, array) =>  // Incluir no documento // { return x } === x
+        array.indexOf(value) === index
+    );
+
+    const newCategories = categoriesRepository.create(newCategoriesTitles.map(title => ( { title } )));
+
+    await categoriesRepository.save(newCategories);
+
+    const categoriesConcated = foundCategories.concat(newCategories);
+
+    const createdTransactions = transactionsRepository.create(
+      transactions.map(transaction => {
+        const { title, type, value } = transaction;
+        return {
+          title,
+          type,
+          value,
+          category: categoriesConcated.find(category => category.title === transaction.category)}
+    }));
+
+    await transactionsRepository.save(createdTransactions);
+
+    return createdTransactions;
   }
 }
 
