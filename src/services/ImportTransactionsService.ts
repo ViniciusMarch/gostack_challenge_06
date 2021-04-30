@@ -1,8 +1,9 @@
-import path from 'path';
 import { getCustomRepository, getRepository, In } from 'typeorm';
-import csv from 'csvtojson';
-import uploadConfig from '../config/upload';
+import csvParse from 'csv-parse'
+import path from 'path';
+import fs from 'fs';
 
+import uploadConfig from '../config/upload';
 import Transaction from '../models/Transaction';
 import TransactionsRepository from '../repositories/TransactionsRepository';
 import Category from '../models/Category';
@@ -26,12 +27,28 @@ class ImportTransactionsService {
     const filePath = path.join(uploadConfig.directory, fileName);
     const transactions: ITransactionParsed[] = [];
     const categories: string[] = [];
+    const lines: string[] = [];
 
-    const parsed: ITransactionParsed[] = await csv().fromFile(filePath);
+    // const parsedData: ITransactionParsed[] =
 
-    parsed.forEach(p => {
-      transactions.push(p);
-      categories.push(p.category);
+    const readCSVStream = fs.createReadStream(filePath);
+
+    const parseStream = csvParse({from_line: 2, ltrim: true, rtrim: true})
+
+    const parseCsv = readCSVStream.pipe(parseStream);
+
+    parseCsv.on('data', (line) => {
+      const [title, type, value, category] = line.map((cell: string) => cell);
+
+      if(!title || !type || !value) return;
+
+      transactions.push({ title, type, value, category });
+
+      categories.push(category);
+    });
+
+    await new Promise(resolve => {
+      parseCsv.on('end', resolve);
     });
 
     const foundCategories = await categoriesRepository.find({ where: { title: In(categories) } });
